@@ -46,18 +46,33 @@ LDK_CLASSPATH=libs/clojure-1.12.0.jar \
 (clojure:make-namespace "my-ns")
 ```
 
+## Building the REPL
+
+Build a standalone executable that presents an interactive Clojure REPL:
+
+```sh
+make cl-clojure
+./cl-clojure
+```
+
+```
+user=> (+ 1 2)
+3
+user=> [1 2 3]
+[1 2 3]
+user=> (def x 42)
+#'user/x
+user=> x
+42
+```
+
+Multi-line input is supported (delimiters are balanced automatically).
+Exit with Ctrl-D.
+
 ## Running Tests
 
 ```sh
 make check
-```
-
-Or manually:
-
-```sh
-LDK_CLASSPATH=libs/clojure-1.12.0.jar \
-  JAVA_HOME=/path/to/java8/jre \
-  sbcl --load test.lisp
 ```
 
 ## Author and License
