@@ -110,6 +110,49 @@
                   (finish-output *error-output*))))))))))
 
 ;;; ---------------------------------------------------------------------------
+;;; Reopen stale file streams after image restore
+;;; ---------------------------------------------------------------------------
+
+(defun %reopen-stale-fd (fis)
+  "Reopen the file backing a FileInputStream whose CL stream was closed
+   by save-lisp-and-die.  Stores the fresh stream back into the fd slot."
+  (let ((fd-sym (intern "fd" :openldk)))
+    (when (and (slot-exists-p fis fd-sym)
+               (slot-boundp fis fd-sym))
+      (let* ((file-descriptor (slot-value fis fd-sym))
+             (fd (if (and file-descriptor
+                          (typep file-descriptor 'standard-object)
+                          (slot-exists-p file-descriptor fd-sym)
+                          (slot-boundp file-descriptor fd-sym))
+                     (slot-value file-descriptor fd-sym)
+                     file-descriptor)))
+        (when (and (typep fd 'sb-sys:fd-stream)
+                   (not (open-stream-p fd)))
+          (let ((path (pathname fd)))
+            (when path
+              (let ((new (open path :element-type '(unsigned-byte 8) :direction :input)))
+                (if (and file-descriptor
+                         (typep file-descriptor 'standard-object)
+                         (slot-exists-p file-descriptor fd-sym)
+                         (slot-boundp file-descriptor fd-sym))
+                    (setf (slot-value file-descriptor fd-sym) new)
+                    (setf (slot-value fis fd-sym) new))))))))))
+
+(defun %fix-stale-file-input-streams ()
+  "Walk the heap and reopen any FileInputStream objects whose backing
+   CL streams were closed by save-lisp-and-die.  Called once at image
+   startup before any Java code runs."
+  (let ((stale nil))
+    (sb-vm:map-allocated-objects
+     (lambda (obj type size)
+       (declare (ignore type size))
+       (when (typep obj 'openldk::|java/io/FileInputStream|)
+         (push obj stale)))
+     :dynamic)
+    (dolist (fis stale)
+      (%reopen-stale-fd fis))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Image building
 ;;; ---------------------------------------------------------------------------
 
@@ -131,6 +174,9 @@
     ;; Warmup eval to ensure the compiler path is hot
     (eval "(+ 1 1)")
 
+    ;; Load clojure.main so the built-in REPL is available in the image
+    (eval "(require 'clojure.main)")
+
     ;; Clear monitor state to prevent deadlocks in the saved image
     (clrhash openldk::*monitors*)
 
@@ -150,8 +196,13 @@
   "Entry point for the dumped Clojure REPL image."
   ;; Disable floating-point traps to match Java semantics
   (sb-int:set-floating-point-modes :traps nil)
+  ;; Reopen any file streams closed by save-lisp-and-die (e.g. /dev/urandom)
+  (%fix-stale-file-input-streams)
   (handler-case
-      (clojure-repl)
+      (let* ((form (cl:funcall *sym-rt-readstring*
+                               (openldk::jstring "(clojure.main/repl)")))
+             (result (cl:funcall *sym-compiler-eval* form)))
+        (declare (ignore result)))
     (error (e)
       (format *error-output* "~&Error: ~A~%" e)
       (finish-output *error-output*)
