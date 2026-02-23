@@ -17,7 +17,6 @@
            #:clojure->cl
            #:cl->clojure
            #:make-namespace
-           #:clojure-repl
            #:make-image))
 
 (in-package #:clojure)
